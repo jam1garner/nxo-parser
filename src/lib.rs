@@ -12,20 +12,20 @@ pub struct NsoFile {
     pub flags: Flags,
     pub text_segment_header: SegmentHeader,
     pub module_name_offset: u32,
-    pub ro_segment_header: SegmentHeader,
+    pub rodata_segment_header: SegmentHeader,
     pub module_name_size: u32,
     pub data_segment_header: SegmentHeader,
     pub bss_size: u32,
     pub module_id: ModuleId,
     pub text_file_size: u32,
-    pub ro_file_size: u32,
+    pub rodata_file_size: u32,
     pub data_file_size: u32,
     pub reserved2: [u32; 7],
     pub embedded_section_header: SectionHeader,
     pub dyn_str_section_header: SectionHeader,
     pub dyn_sym_section_header: SectionHeader,
     pub text_hash: Sha256,
-    pub ro_hash: Sha256,
+    pub rodata_hash: Sha256,
     pub data_hash: Sha256,
 }
 
@@ -54,6 +54,56 @@ impl NsoFile {
             Ok(data)
         }
     }
+    
+    pub fn get_raw_data_reader<'a, R: Read + Seek>(&self, reader: &'a mut R) -> io::Result<impl Read + 'a> {
+        reader.seek(SeekFrom::Start(self.data_segment_header.file_offset as u64))?;
+
+        Ok(reader.take(self.data_file_size as u64))
+    }
+
+    pub fn get_data<R: Read + Seek>(&self, reader: &mut R) -> io::Result<Vec<u8>> {
+        if self.flags.data_compressed() {
+            let mut reader = self.get_raw_data_reader(reader)?;
+            let mut compressed_data = Vec::with_capacity(self.data_file_size as usize);
+            reader.read_to_end(&mut compressed_data)?;
+
+            lz4::block::decompress(
+                &compressed_data[..],
+                Some(self.data_segment_header.size.try_into().unwrap())
+            )
+        } else {
+            let mut reader = self.get_raw_data_reader(reader)?;
+            let mut data = Vec::with_capacity(self.data_file_size as usize);
+            reader.read_to_end(&mut data)?;
+
+            Ok(data)
+        }
+    }
+    
+    pub fn get_raw_rodata_reader<'a, R: Read + Seek>(&self, reader: &'a mut R) -> io::Result<impl Read + 'a> {
+        reader.seek(SeekFrom::Start(self.rodata_segment_header.file_offset as u64))?;
+
+        Ok(reader.take(self.rodata_file_size as u64))
+    }
+
+    pub fn get_rodata<R: Read + Seek>(&self, reader: &mut R) -> io::Result<Vec<u8>> {
+        if self.flags.rodata_compressed() {
+            let mut reader = self.get_raw_rodata_reader(reader)?;
+            let mut compressed_rodata = Vec::with_capacity(self.data_file_size as usize);
+            reader.read_to_end(&mut compressed_rodata)?;
+
+            lz4::block::decompress(
+                &compressed_rodata[..],
+                Some(self.rodata_segment_header.size.try_into().unwrap())
+            )
+        } else {
+            let mut reader = self.get_raw_rodata_reader(reader)?;
+            let mut rodata = Vec::with_capacity(self.rodata_file_size as usize);
+            reader.read_to_end(&mut rodata)?;
+
+            Ok(rodata)
+        }
+    }
 }
 
 type ModuleId = [u8; 32];
@@ -64,10 +114,10 @@ type Sha256 = [u8; 32];
 #[br(map = Self::from_bytes)]
 pub struct Flags {
     pub text_compressed: bool,
-    pub ro_compressed: bool,
+    pub rodata_compressed: bool,
     pub data_compressed: bool,
     pub text_hash: bool,
-    pub ro_hash: bool,
+    pub rodata_hash: bool,
     pub data_hash: bool,
     pub reserved: B26,
 }
